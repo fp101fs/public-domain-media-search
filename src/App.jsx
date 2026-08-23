@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchWikimedia, fetchOpenverse, fetchNASA } from './sources.js'
+import {
+  fetchWikimedia,
+  fetchOpenverse,
+  fetchNASA,
+  fetchInternetArchive,
+  fetchMet,
+  fetchCleveland,
+} from './sources.js'
 // Library of Congress is temporarily hidden from the UI (its API is
 // frequently Cloudflare-blocked from the browser — see notes in
 // sources.js). fetchLOC is still exported there; re-add a tab entry
@@ -9,6 +16,9 @@ const TABS = [
   { key: 'wikimedia', label: 'Wikimedia' },
   { key: 'openverse', label: 'Openverse' },
   { key: 'nasa', label: 'NASA' },
+  { key: 'archive', label: 'Internet Archive' },
+  { key: 'met', label: 'The Met' },
+  { key: 'cleveland', label: 'Cleveland Museum' },
 ]
 
 const PAGE_SIZE = 12
@@ -59,6 +69,9 @@ export default function App() {
       if (tab === 'wikimedia') results = await fetchWikimedia(q, mediaType, controller.signal)
       else if (tab === 'openverse') results = await fetchOpenverse(q, controller.signal)
       else if (tab === 'nasa') results = await fetchNASA(q, controller.signal)
+      else if (tab === 'archive') results = await fetchInternetArchive(q, controller.signal)
+      else if (tab === 'met') results = await fetchMet(q, controller.signal)
+      else if (tab === 'cleveland') results = await fetchCleveland(q, controller.signal)
 
       setItems(results)
       setStatus(results.length ? `${results.length} result(s)` : 'No results found.')

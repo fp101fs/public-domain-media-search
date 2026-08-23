@@ -198,3 +198,112 @@ export async function fetchNASA(query, signal) {
     })
     .filter((item) => item.thumb)
 }
+
+// Internet Archive: keyless, CORS-open (access-control-allow-origin: *),
+// verified directly against the live API. Restricting the query to items
+// whose licenseurl is a public-domain or CC0 grant keeps this consistent
+// with the other sources' PD/CC0-only filtering.
+export async function fetchInternetArchive(query, signal) {
+  const q = `mediatype:image AND (${query}) AND licenseurl:(*publicdomain* OR *zero*)`
+  const response = await fetch(
+    'https://archive.org/advancedsearch.php?' +
+      new URLSearchParams({
+        q,
+        'fl[]': ['identifier', 'title', 'creator', 'licenseurl'],
+        rows: '24',
+        page: '1',
+        output: 'json',
+      }),
+    { signal }
+  )
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const data = await response.json()
+  const docs = (data.response && data.response.docs) || []
+  return docs
+    .filter((d) => d.identifier)
+    .map((d) => {
+      // The img service always returns a fixed-size derivative thumbnail —
+      // there's no reliably-named full-res file in search results without
+      // an extra per-item metadata fetch, so the item's details page (not
+      // a raw file) is what "view source" / the image link opens to.
+      const thumb = `https://archive.org/services/img/${encodeURIComponent(d.identifier)}`
+      const sourceUrl = `https://archive.org/details/${encodeURIComponent(d.identifier)}`
+      const license = /zero/.test(d.licenseurl || '')
+        ? 'CC0'
+        : 'Public domain'
+      return {
+        url: sourceUrl,
+        thumb,
+        title: d.title || d.identifier,
+        author: d.creator || '',
+        license,
+        sourceUrl,
+        type: 'image',
+      }
+    })
+}
+
+// Metropolitan Museum of Art Collection API: keyless, CORS-open (verified
+// with an Origin header against the live API). isPublicDomain gates every
+// result already; no extra license filtering needed.
+export async function fetchMet(query, signal) {
+  const searchRes = await fetch(
+    'https://collectionapi.metmuseum.org/public/collection/v1/search?' +
+      new URLSearchParams({ q: query, hasImages: 'true' }),
+    { signal }
+  )
+  if (!searchRes.ok) throw new Error(`HTTP ${searchRes.status}`)
+  const searchData = await searchRes.json()
+  const ids = (searchData.objectIDs || []).slice(0, 24)
+
+  const objects = await Promise.all(
+    ids.map((id) =>
+      fetch(`https://collectionapi.metmuseum.org/public/collection/v1/objects/${id}`, { signal })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch((e) => {
+          if (e.name === 'AbortError') throw e
+          return null
+        })
+    )
+  )
+
+  return objects
+    .filter((o) => o && o.isPublicDomain && (o.primaryImageSmall || o.primaryImage))
+    .map((o) => ({
+      url: o.primaryImage || o.primaryImageSmall,
+      thumb: o.primaryImageSmall || o.primaryImage,
+      title: o.title || 'Untitled',
+      author: o.artistDisplayName || '',
+      license: 'Public domain (The Met)',
+      sourceUrl: o.objectURL || 'https://www.metmuseum.org/art/collection',
+      type: 'image',
+    }))
+}
+
+// Cleveland Museum of Art Open Access API: keyless, CORS-open (verified
+// against the live API). share_license_status === 'CC0' gates every result.
+export async function fetchCleveland(query, signal) {
+  const response = await fetch(
+    'https://openaccess-api.clevelandart.org/api/artworks?' +
+      new URLSearchParams({ q: query, limit: '24', cc0: '1' }),
+    { signal }
+  )
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const data = await response.json()
+  const results = data.data || []
+  return results
+    .filter((r) => r.share_license_status === 'CC0' && r.images && r.images.web)
+    .map((r) => {
+      const author = (r.creators && r.creators[0] && r.creators[0].description) || ''
+      return {
+        url: r.images.web.url || r.images.print?.url || '',
+        thumb: r.images.web.url || '',
+        title: r.title || 'Untitled',
+        author,
+        license: 'CC0 (Cleveland Museum of Art)',
+        sourceUrl: r.url || 'https://www.clevelandart.org/art',
+        type: 'image',
+      }
+    })
+    .filter((item) => item.thumb)
+}
