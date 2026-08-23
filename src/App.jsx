@@ -6,11 +6,8 @@ import {
   fetchInternetArchive,
   fetchMet,
   fetchCleveland,
+  fetchLOC,
 } from './sources.js'
-// Library of Congress is temporarily hidden from the UI (its API is
-// frequently Cloudflare-blocked from the browser — see notes in
-// sources.js). fetchLOC is still exported there; re-add a tab entry
-// below and the import above to bring it back.
 
 const TABS = [
   { key: 'wikimedia', label: 'Wikimedia' },
@@ -19,6 +16,7 @@ const TABS = [
   { key: 'archive', label: 'Internet Archive' },
   { key: 'met', label: 'The Met' },
   { key: 'cleveland', label: 'Cleveland Museum' },
+  { key: 'loc', label: 'Library of Congress' },
 ]
 
 const PAGE_SIZE = 12
@@ -72,6 +70,7 @@ export default function App() {
       else if (tab === 'archive') results = await fetchInternetArchive(q, controller.signal)
       else if (tab === 'met') results = await fetchMet(q, controller.signal)
       else if (tab === 'cleveland') results = await fetchCleveland(q, controller.signal)
+      else if (tab === 'loc') results = await fetchLOC(q, controller.signal)
 
       setItems(results)
       setStatus(results.length ? `${results.length} result(s)` : 'No results found.')

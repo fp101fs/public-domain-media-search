@@ -95,41 +95,28 @@ export async function fetchOpenverse(query, signal) {
   }))
 }
 
-// LOC's search API sits behind Cloudflare bot protection that blocks
-// browser-side cross-origin access both ways:
-//   - fetch(): no Access-Control-Allow-Origin on the response the browser
-//     actually receives (curl gets it; real browser requests get challenged)
-//   - JSONP via <script src>: the response Content-Type is always
-//     application/json (with nosniff), so Chrome's ORB blocks executing it
-//     as a script regardless of the callback wrapper — this is not
-//     intermittent, it structurally can't work.
-// Public CORS proxies (allorigins, corsproxy.io, corsfix, codetabs, etc.)
-// were tried and are either down or themselves get Cloudflare-challenged by
-// loc.gov, since it blocks known datacenter/proxy IP ranges. There is no
-// reliable pure-front-end fix here; a real fix needs a backend/proxy you
-// control (e.g. a small Cloudflare Worker) to relay the request server-side.
-// This still attempts a direct fetch — it'll work if LOC's bot protection
-// ever loosens for your network — and fails with a clear message otherwise.
+// LOC's search API sits behind Cloudflare bot protection: any cross-origin
+// fetch() carries an Origin header, and Cloudflare challenges every request
+// that has one (verified directly — identical requests succeed without an
+// Origin header, get a 403 "Just a moment..." challenge with one). That's
+// not something a browser can route around client-side, so this goes
+// through our own Vercel serverless function (api/loc.js) instead, which
+// calls loc.gov server-to-server (no Origin header) and forwards the JSON.
 // LOC's search API also has no license/rights query filter, so "public
 // domain only" has to be applied client-side (see filter below).
 export async function fetchLOC(query, signal) {
-  const baseUrl = 'https://www.loc.gov/photos/'
-  const params = new URLSearchParams({
-    q: query,
-    fo: 'json',
-    c: '25',
-  })
-  const url = `${baseUrl}?${params.toString()}`
+  const url = '/api/loc?' + new URLSearchParams({ q: query })
   let response
   try {
     response = await fetch(url, { signal })
   } catch (e) {
     if (e.name === 'AbortError') throw e
-    throw new Error(
-      'Library of Congress blocked this request (their site blocks cross-origin browser access). This tab cannot work without a server-side proxy you control.'
-    )
+    throw new Error('Could not reach the Library of Congress proxy.')
   }
-  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(body?.error || `HTTP ${response.status}`)
+  }
   const data = await response.json()
   const results = (data.content && data.content.results) || []
 
