@@ -104,8 +104,8 @@ export async function fetchOpenverse(query, signal) {
 // calls loc.gov server-to-server (no Origin header) and forwards the JSON.
 // LOC's search API also has no license/rights query filter, so "public
 // domain only" has to be applied client-side (see filter below).
-export async function fetchLOC(query, signal) {
-  const url = '/api/loc?' + new URLSearchParams({ q: query })
+async function locSearch(query, format, signal) {
+  const url = '/api/loc?' + new URLSearchParams({ q: query, format })
   let response
   try {
     response = await fetch(url, { signal })
@@ -120,7 +120,7 @@ export async function fetchLOC(query, signal) {
   const data = await response.json()
   const results = (data.content && data.content.results) || []
 
-  const filtered = results.filter((r) => {
+  return results.filter((r) => {
     if (r.access_restricted) return false
     const item = r.item || {}
     // Presence of a rights_advisory/rights_information note means usage is
@@ -130,29 +130,79 @@ export async function fetchLOC(query, signal) {
     if (advisory && (Array.isArray(advisory) ? advisory.length : true)) return false
     return true
   })
+}
 
+function locAuthor(r) {
+  const item = r.item || {}
+  return (
+    (item.contributors && item.contributors[0]) ||
+    (item.creators && item.creators[0] && item.creators[0].title) ||
+    ''
+  )
+}
+
+function locSourceUrl(r) {
+  const item = r.item || {}
+  let sourceUrl = r.url || item.link || ''
+  if (sourceUrl.startsWith('//')) sourceUrl = 'https:' + sourceUrl
+  return sourceUrl
+}
+
+async function fetchLOCImages(query, signal) {
+  const filtered = await locSearch(query, 'photos', signal)
   return filtered
     .filter((r) => r.image_url && r.image_url.length)
     .map((r) => {
       const images = r.image_url
       const thumb = images[0] || ''
       const full = images[images.length - 1] || thumb
-      const title = r.title || ''
-      const item = r.item || {}
-      const author =
-        (item.contributors && item.contributors[0]) ||
-        (item.creators && item.creators[0] && item.creators[0].title) ||
-        ''
-      const license = 'Public domain / no known restrictions'
-      let sourceUrl = r.url || item.link || ''
-      if (sourceUrl.startsWith('//')) sourceUrl = 'https:' + sourceUrl
-      return { url: full, thumb, title, author, license, sourceUrl }
+      return {
+        url: full,
+        thumb,
+        title: r.title || '',
+        author: locAuthor(r),
+        license: 'Public domain / no known restrictions',
+        sourceUrl: locSourceUrl(r),
+        type: 'image',
+      }
     })
 }
 
-export async function fetchNASA(query, signal) {
+async function fetchLOCVideos(query, signal) {
+  const filtered = await locSearch(query, 'film-and-videos', signal)
+  return filtered
+    .map((r) => {
+      // Video URL/thumbnail live in resources[0], not image_url — only
+      // present when LoC actually has a digitized, streamable copy.
+      const resource = (r.resources || []).find((res) => res.type === 'video' && res.video)
+      if (!resource) return null
+      return {
+        url: resource.video,
+        thumb: resource.image || resource.background || '',
+        title: r.title || '',
+        author: locAuthor(r),
+        license: 'Public domain / no known restrictions',
+        sourceUrl: locSourceUrl(r),
+        type: 'video',
+      }
+    })
+    .filter(Boolean)
+    .filter((item) => item.thumb)
+}
+
+export async function fetchLOC(query, mediaType = 'images', signal) {
+  if (mediaType === 'images') return fetchLOCImages(query, signal)
+  if (mediaType === 'videos') return fetchLOCVideos(query, signal)
+  const [images, videos] = await Promise.all([
+    fetchLOCImages(query, signal),
+    fetchLOCVideos(query, signal),
+  ])
+  return [...images, ...videos]
+}
+
+async function nasaSearch(query, mediaType, signal) {
   const encodedQuery = encodeURIComponent(query)
-  const url = `https://images-api.nasa.gov/search?q=${encodedQuery}&page=1&media_type=image`
+  const url = `https://images-api.nasa.gov/search?q=${encodedQuery}&page=1&media_type=${mediaType}`
   const response = await fetch(url, { signal })
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   const data = await response.json()
@@ -169,6 +219,25 @@ export async function fetchNASA(query, signal) {
       const sourceUrl = nasaId
         ? `https://images.nasa.gov/details/${encodeURIComponent(nasaId)}`
         : 'https://images.nasa.gov/'
+
+      if (mediaType === 'video') {
+        if (!nasaId) return null
+        // NASA's asset host follows a predictable {id}/{id}~variant.ext
+        // naming scheme, so the actual video file can be built straight
+        // from nasa_id — confirmed against multiple items — with no extra
+        // per-item request. ~mobile.mp4 is a compressed streaming-sized
+        // variant (not the multi-hundred-MB ~orig.mp4).
+        const base = `https://images-assets.nasa.gov/video/${encodeURIComponent(nasaId)}/${encodeURIComponent(nasaId)}`
+        return {
+          url: `${base}~mobile.mp4`,
+          thumb: `${base}~thumb.jpg`,
+          title,
+          author,
+          license,
+          sourceUrl,
+          type: 'video',
+        }
+      }
 
       let thumb = ''
       let fullUrl = ''
@@ -189,21 +258,28 @@ export async function fetchNASA(query, signal) {
         type: 'image',
       }
     })
+    .filter(Boolean)
     .filter((item) => item.thumb)
 }
 
-// Internet Archive: keyless, CORS-open (access-control-allow-origin: *),
-// verified directly against the live API. Restricting the query to items
-// whose licenseurl is a public-domain or CC0 grant keeps this consistent
-// with the other sources' PD/CC0-only filtering.
-export async function fetchInternetArchive(query, signal) {
-  const q = `mediatype:image AND (${query}) AND licenseurl:(*publicdomain* OR *zero*)`
+export async function fetchNASA(query, mediaType = 'images', signal) {
+  if (mediaType === 'images') return nasaSearch(query, 'image', signal)
+  if (mediaType === 'videos') return nasaSearch(query, 'video', signal)
+  const [images, videos] = await Promise.all([
+    nasaSearch(query, 'image', signal),
+    nasaSearch(query, 'video', signal),
+  ])
+  return [...images, ...videos]
+}
+
+async function iaAdvancedSearch(query, mediatype, rows, signal) {
+  const q = `mediatype:${mediatype} AND (${query}) AND licenseurl:(*publicdomain* OR *zero*)`
   const response = await fetch(
     'https://archive.org/advancedsearch.php?' +
       new URLSearchParams({
         q,
         'fl[]': ['identifier', 'title', 'creator', 'licenseurl'],
-        rows: '24',
+        rows: String(rows),
         page: '1',
         output: 'json',
       }),
@@ -211,29 +287,85 @@ export async function fetchInternetArchive(query, signal) {
   )
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   const data = await response.json()
-  const docs = (data.response && data.response.docs) || []
-  return docs
-    .filter((d) => d.identifier)
-    .map((d) => {
-      // The img service always returns a fixed-size derivative thumbnail —
-      // there's no reliably-named full-res file in search results without
-      // an extra per-item metadata fetch, so the item's details page (not
-      // a raw file) is what "view source" / the image link opens to.
-      const thumb = `https://archive.org/services/img/${encodeURIComponent(d.identifier)}`
+  return ((data.response && data.response.docs) || []).filter((d) => d.identifier)
+}
+
+function iaLicense(licenseurl) {
+  return /zero/.test(licenseurl || '') ? 'CC0' : 'Public domain'
+}
+
+// Internet Archive: keyless, CORS-open (access-control-allow-origin: *),
+// verified directly against the live API. Restricting the query to items
+// whose licenseurl is a public-domain or CC0 grant keeps this consistent
+// with the other sources' PD/CC0-only filtering.
+async function fetchInternetArchiveImages(query, rows, signal) {
+  const docs = await iaAdvancedSearch(query, 'image', rows, signal)
+  return docs.map((d) => {
+    // The img service always returns a fixed-size derivative thumbnail —
+    // there's no reliably-named full-res file in search results without
+    // an extra per-item metadata fetch, so the item's details page (not
+    // a raw file) is what "view source" / the image link opens to.
+    const thumb = `https://archive.org/services/img/${encodeURIComponent(d.identifier)}`
+    const sourceUrl = `https://archive.org/details/${encodeURIComponent(d.identifier)}`
+    return {
+      url: sourceUrl,
+      thumb,
+      title: d.title || d.identifier,
+      author: d.creator || '',
+      license: iaLicense(d.licenseurl),
+      sourceUrl,
+      type: 'image',
+    }
+  })
+}
+
+// Unlike images, IA video files aren't at a predictable URL — the actual
+// filename (often not even related to the identifier) only comes from a
+// per-item metadata call. Rows are capped low here since each result costs
+// one extra request.
+async function fetchInternetArchiveVideos(query, rows, signal) {
+  const docs = await iaAdvancedSearch(query, 'movies', rows, signal)
+  const withFiles = await Promise.all(
+    docs.map((d) =>
+      fetch(`https://archive.org/metadata/${encodeURIComponent(d.identifier)}`, { signal })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((meta) => ({ d, meta }))
+        .catch((e) => {
+          if (e.name === 'AbortError') throw e
+          return { d, meta: null }
+        })
+    )
+  )
+
+  return withFiles
+    .map(({ d, meta }) => {
+      const files = (meta && meta.files) || []
+      const videoFile =
+        files.find((f) => /\.mp4$/i.test(f.name || '')) ||
+        files.find((f) => /\.ogv$/i.test(f.name || ''))
+      if (!videoFile) return null
       const sourceUrl = `https://archive.org/details/${encodeURIComponent(d.identifier)}`
-      const license = /zero/.test(d.licenseurl || '')
-        ? 'CC0'
-        : 'Public domain'
       return {
-        url: sourceUrl,
-        thumb,
+        url: `https://archive.org/download/${encodeURIComponent(d.identifier)}/${encodeURIComponent(videoFile.name)}`,
+        thumb: `https://archive.org/services/img/${encodeURIComponent(d.identifier)}`,
         title: d.title || d.identifier,
         author: d.creator || '',
-        license,
+        license: iaLicense(d.licenseurl),
         sourceUrl,
-        type: 'image',
+        type: 'video',
       }
     })
+    .filter(Boolean)
+}
+
+export async function fetchInternetArchive(query, mediaType = 'images', signal) {
+  if (mediaType === 'images') return fetchInternetArchiveImages(query, 24, signal)
+  if (mediaType === 'videos') return fetchInternetArchiveVideos(query, 12, signal)
+  const [images, videos] = await Promise.all([
+    fetchInternetArchiveImages(query, 16, signal),
+    fetchInternetArchiveVideos(query, 8, signal),
+  ])
+  return [...images, ...videos]
 }
 
 // Metropolitan Museum of Art Collection API: keyless, CORS-open (verified

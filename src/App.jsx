@@ -20,6 +20,9 @@ const TABS = [
 ]
 
 const PAGE_SIZE = 12
+// These sources have a real video index; the others (Openverse, The Met,
+// Cleveland Museum) only index images — no media-type toggle for them.
+const VIDEO_CAPABLE = new Set(['wikimedia', 'nasa', 'archive', 'loc'])
 
 export default function App() {
   const [query, setQuery] = useState('')
@@ -66,11 +69,11 @@ export default function App() {
       let results = []
       if (tab === 'wikimedia') results = await fetchWikimedia(q, mediaType, controller.signal)
       else if (tab === 'openverse') results = await fetchOpenverse(q, controller.signal)
-      else if (tab === 'nasa') results = await fetchNASA(q, controller.signal)
-      else if (tab === 'archive') results = await fetchInternetArchive(q, controller.signal)
+      else if (tab === 'nasa') results = await fetchNASA(q, mediaType, controller.signal)
+      else if (tab === 'archive') results = await fetchInternetArchive(q, mediaType, controller.signal)
       else if (tab === 'met') results = await fetchMet(q, controller.signal)
       else if (tab === 'cleveland') results = await fetchCleveland(q, controller.signal)
-      else if (tab === 'loc') results = await fetchLOC(q, controller.signal)
+      else if (tab === 'loc') results = await fetchLOC(q, mediaType, controller.signal)
 
       setItems(results)
       setStatus(results.length ? `${results.length} result(s)` : 'No results found.')
@@ -124,7 +127,7 @@ export default function App() {
           ))}
         </div>
 
-        {tab === 'wikimedia' && (
+        {VIDEO_CAPABLE.has(tab) && (
           <div className="media-type">
             {['images', 'videos', 'both'].map((v) => (
               <label key={v}>
