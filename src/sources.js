@@ -72,11 +72,17 @@ export async function fetchOpenverse(query, signal) {
         q: query,
         // cc0 = public domain dedication, pdm = public domain mark (no known copyright)
         license: 'cc0,pdm',
-        page_size: '30',
+        // Openverse hard-caps anonymous (keyless) requests at 20 — anything
+        // higher is a 401 "page_size may not exceed 20 for anonymous
+        // requests", not a rate limit. Don't raise this without an API key.
+        page_size: '20',
       }),
     { signal }
   )
-  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null)
+    throw new Error(detail?.detail || `HTTP ${response.status}`)
+  }
   const data = await response.json()
   const results = data.results || []
   return results.map((r) => ({
