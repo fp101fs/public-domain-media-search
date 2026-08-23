@@ -1,6 +1,6 @@
 // Fetch functions for each public-domain media source.
 
-async function wikimediaSearch(gsrsearch, limit) {
+async function wikimediaSearch(gsrsearch, limit, signal) {
   const response = await fetch(
     'https://commons.wikimedia.org/w/api.php?' +
       new URLSearchParams({
@@ -11,10 +11,13 @@ async function wikimediaSearch(gsrsearch, limit) {
         gsrlimit: String(limit),
         prop: 'imageinfo',
         iiprop: 'url|extmetadata|mediatype',
-        iiurlwidth: '300',
+        // Cards render at ~220-260px wide — requesting a thumbnail close to
+        // that (rather than 300px) trims transfer size with no visible loss.
+        iiurlwidth: '240',
         format: 'json',
         origin: '*',
-      })
+      }),
+    { signal }
   )
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   const data = await response.json()
@@ -45,30 +48,33 @@ async function wikimediaSearch(gsrsearch, limit) {
   return items
 }
 
-export async function fetchWikimedia(query, mediaType = 'images') {
+export async function fetchWikimedia(query, mediaType = 'images', signal) {
+  // Fetch a larger batch than one page so client-side pagination has
+  // multiple pages to work with.
   if (mediaType === 'images') {
-    return wikimediaSearch(query, 20)
+    return wikimediaSearch(query, 40, signal)
   }
   if (mediaType === 'videos') {
-    return wikimediaSearch(`filetype:video ${query}`, 20)
+    return wikimediaSearch(`filetype:video ${query}`, 40, signal)
   }
   // 'both' — run image and video searches in parallel and merge.
   const [images, videos] = await Promise.all([
-    wikimediaSearch(query, 10),
-    wikimediaSearch(`filetype:video ${query}`, 10),
+    wikimediaSearch(query, 20, signal),
+    wikimediaSearch(`filetype:video ${query}`, 20, signal),
   ])
   return [...images, ...videos]
 }
 
-export async function fetchOpenverse(query) {
+export async function fetchOpenverse(query, signal) {
   const response = await fetch(
     'https://api.openverse.org/v1/images/?' +
       new URLSearchParams({
         q: query,
         // cc0 = public domain dedication, pdm = public domain mark (no known copyright)
         license: 'cc0,pdm',
-        page_size: '10',
-      })
+        page_size: '30',
+      }),
+    { signal }
   )
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   const data = await response.json()
@@ -100,7 +106,7 @@ export async function fetchOpenverse(query) {
 // ever loosens for your network — and fails with a clear message otherwise.
 // LOC's search API also has no license/rights query filter, so "public
 // domain only" has to be applied client-side (see filter below).
-export async function fetchLOC(query) {
+export async function fetchLOC(query, signal) {
   const baseUrl = 'https://www.loc.gov/photos/'
   const params = new URLSearchParams({
     q: query,
@@ -110,8 +116,9 @@ export async function fetchLOC(query) {
   const url = `${baseUrl}?${params.toString()}`
   let response
   try {
-    response = await fetch(url)
+    response = await fetch(url, { signal })
   } catch (e) {
+    if (e.name === 'AbortError') throw e
     throw new Error(
       'Library of Congress blocked this request (their site blocks cross-origin browser access). This tab cannot work without a server-side proxy you control.'
     )
@@ -150,10 +157,10 @@ export async function fetchLOC(query) {
     })
 }
 
-export async function fetchNASA(query) {
+export async function fetchNASA(query, signal) {
   const encodedQuery = encodeURIComponent(query)
   const url = `https://images-api.nasa.gov/search?q=${encodedQuery}&page=1&media_type=image`
-  const response = await fetch(url)
+  const response = await fetch(url, { signal })
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   const data = await response.json()
   const items = (data.collection && data.collection.items) || []

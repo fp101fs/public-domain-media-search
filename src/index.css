@@ -180,6 +180,10 @@ body {
   display: flex;
   flex-direction: column;
   transition: transform 0.15s ease, border-color 0.15s ease;
+  /* Skip layout/paint for cards scrolled out of view — cheap win on
+     result sets of a few dozen items. */
+  content-visibility: auto;
+  contain-intrinsic-size: 320px;
 }
 
 .card:hover {
@@ -243,6 +247,36 @@ body {
 
 .card-links a:hover {
   text-decoration: underline;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 2rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.pagination button {
+  padding: 0.5rem 1rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, opacity 0.15s ease;
+}
+
+.pagination button:hover:not(:disabled) {
+  border-color: var(--accent-2);
+}
+
+.pagination button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .empty {

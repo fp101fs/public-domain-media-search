@@ -1,25 +1,38 @@
-import { useState } from 'react'
-import { fetchWikimedia, fetchOpenverse, fetchLOC, fetchNASA } from './sources.js'
+import { useEffect, useRef, useState } from 'react'
+import { fetchWikimedia, fetchOpenverse, fetchNASA } from './sources.js'
+// Library of Congress is temporarily hidden from the UI (its API is
+// frequently Cloudflare-blocked from the browser — see notes in
+// sources.js). fetchLOC is still exported there; re-add a tab entry
+// below and the import above to bring it back.
 
 const TABS = [
   { key: 'wikimedia', label: 'Wikimedia' },
   { key: 'openverse', label: 'Openverse' },
-  { key: 'loc', label: 'Library of Congress' },
   { key: 'nasa', label: 'NASA' },
 ]
+
+const PAGE_SIZE = 12
 
 export default function App() {
   const [query, setQuery] = useState('')
   const [tab, setTab] = useState('wikimedia')
   const [mediaType, setMediaType] = useState('images')
   const [items, setItems] = useState([])
+  const [page, setPage] = useState(1)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
+  const abortRef = useRef(null)
+
+  // Cancel any in-flight request on unmount so it doesn't try to update
+  // state after the component is gone.
+  useEffect(() => () => abortRef.current?.abort(), [])
+
   function switchTab(key) {
     setTab(key)
     setItems([])
+    setPage(1)
     setStatus('')
     setError('')
   }
@@ -29,28 +42,42 @@ export default function App() {
     const q = query.trim()
     if (!q) return
 
+    // Cancel any previous, still-in-flight search so a slow earlier
+    // response can't land after a newer one and overwrite it.
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+
     setLoading(true)
     setError('')
     setItems([])
+    setPage(1)
     setStatus('Searching...')
 
     try {
       let results = []
-      if (tab === 'wikimedia') results = await fetchWikimedia(q, mediaType)
-      else if (tab === 'openverse') results = await fetchOpenverse(q)
-      else if (tab === 'loc') results = await fetchLOC(q)
-      else if (tab === 'nasa') results = await fetchNASA(q)
+      if (tab === 'wikimedia') results = await fetchWikimedia(q, mediaType, controller.signal)
+      else if (tab === 'openverse') results = await fetchOpenverse(q, controller.signal)
+      else if (tab === 'nasa') results = await fetchNASA(q, controller.signal)
 
       setItems(results)
       setStatus(results.length ? `${results.length} result(s)` : 'No results found.')
     } catch (err) {
+      if (err.name === 'AbortError') return
       console.error(err)
       setStatus('')
       setError(err.message || 'Something went wrong.')
     } finally {
-      setLoading(false)
+      if (abortRef.current === controller) setLoading(false)
     }
   }
+
+  function hideBrokenImage(e) {
+    e.currentTarget.closest('.card')?.style.setProperty('display', 'none')
+  }
+
+  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE))
+  const pageItems = items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   return (
     <div className="app">
@@ -107,39 +134,69 @@ export default function App() {
         <div className={`status ${error ? 'error' : ''}`}>{error || status}</div>
       )}
 
-      {items.length > 0 && (
-        <div className="results">
-          {items.map((item, i) => (
-            <div className="card" key={`${item.sourceUrl}-${i}`}>
-              <div className="card-media">
-                {item.type === 'video' ? (
-                  <video src={item.url} poster={item.thumb} controls preload="metadata" />
-                ) : (
-                  <a href={item.url} target="_blank" rel="noopener noreferrer">
-                    <img src={item.thumb} alt={item.title} loading="lazy" />
-                  </a>
-                )}
-              </div>
-              <div className="card-body">
-                <div className="card-title">{item.title}</div>
-                <div className="card-meta">
-                  {item.author && <div>By: {item.author}</div>}
-                  {item.license && <div>License: {item.license}</div>}
-                </div>
-                <div className="card-links">
-                  <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer">
-                    View source
-                  </a>
-                  {item.type === 'video' && (
+      {pageItems.length > 0 && (
+        <>
+          <div className="results">
+            {pageItems.map((item, i) => (
+              <div className="card" key={`${item.sourceUrl}-${i}`}>
+                <div className="card-media">
+                  {item.type === 'video' ? (
+                    <video src={item.url} poster={item.thumb} controls preload="metadata" />
+                  ) : (
                     <a href={item.url} target="_blank" rel="noopener noreferrer">
-                      Open video
+                      <img
+                        src={item.thumb}
+                        alt={item.title}
+                        loading="lazy"
+                        decoding="async"
+                        onError={hideBrokenImage}
+                      />
                     </a>
                   )}
                 </div>
+                <div className="card-body">
+                  <div className="card-title">{item.title}</div>
+                  <div className="card-meta">
+                    {item.author && <div>By: {item.author}</div>}
+                    {item.license && <div>License: {item.license}</div>}
+                  </div>
+                  <div className="card-links">
+                    <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer">
+                      View source
+                    </a>
+                    {item.type === 'video' && (
+                      <a href={item.url} target="_blank" rel="noopener noreferrer">
+                        Open video
+                      </a>
+                    )}
+                  </div>
+                </div>
               </div>
+            ))}
+          </div>
+
+          {totalPages > 1 && (
+            <div className="pagination">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+              >
+                ← Prev
+              </button>
+              <span>
+                Page {page} of {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+              >
+                Next →
+              </button>
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
 
       {!loading && !items.length && !status && !error && (
